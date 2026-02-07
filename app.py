@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request
-from model_setting import DomainClassifier
+from SURF_AI_model.model_setting import DomainClassifier
 
 app = Flask(__name__)
 
