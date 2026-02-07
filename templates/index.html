@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SURF | Protection Status</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #ffffff;
+            color: #1e293b;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+        }
+    </style>
+</head>
+
+<body class="flex items-center justify-center min-h-screen">
+
+    <div class="card w-full max-w-sm rounded-3xl p-10 text-center">
+        <div class="relative w-64 h-48 mx-auto mb-4">
+            <canvas id="gaugeChart"></canvas>
+            <div class="absolute inset-0 flex flex-col items-center justify-center pt-16">
+                <span id="scoreDisplay" class="text-4xl font-extrabold text-slate-900 tracking-tight">0%</span>
+                <span class="text-[10px] text-slate-400 font-bold tracking-widest uppercase mt-1">Threat Score</span>
+            </div>
+        </div>
+
+        <div class="mb-10">
+            <p class="text-[10px] text-slate-400 uppercase tracking-widest mb-2">Blocked Domain</p>
+            <p class="text-lg font-mono text-blue-600 font-semibold break-all">{{ domain }}</p>
+        </div>
+
+        <button onclick="location.reload()"
+            class="w-full py-4 rounded-2xl bg-slate-900 hover:bg-slate-800 transition-all text-white font-bold tracking-tight text-sm">
+            RE-SCAN DOMAIN
+        </button>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('gaugeChart').getContext('2d');
+
+        // 점수 설정
+        const score = {{ prob }};
+        // const score = 80.55;
+
+        // 화면 숫자 업데이트
+        document.getElementById('scoreDisplay').innerText = score + '%';
+
+        // 3단계 색상 로직 적용
+        let mainColor;
+        if (score < 40) {
+            mainColor = '#22c55e'; // 초록 (Safe)
+        } else if (score < 75) {
+            mainColor = '#eab308'; // 노랑 (Caution)
+        } else {
+            mainColor = '#ef4444'; // 빨강 (Danger)
+        }
+
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [score, 100 - score],
+                    backgroundColor: [mainColor, '#f1f5f9'],
+                    borderWidth: 0,
+                    circumference: 180,
+                    rotation: 270,
+                    cutout: '85%',
+                    borderRadius: 30
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                animation: { duration: 1000, easing: 'easeOutBack' }
+            }
+        });
+    </script>
+</body>
+
+</html>
