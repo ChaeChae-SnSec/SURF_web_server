@@ -1,11 +1,12 @@
 # app.py
+import dotenv
+dotenv.load_dotenv()
 
 import os
 import sys
 import time
 
-# 1. 가상환경 경로 설정
-VENV_PATH = '/opt/miniforge/envs/lower/lib/python3.9/site-packages'
+VENV_PATH = os.getenv('VENV_PATH')
 sys.path.insert(0, VENV_PATH)
 
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST, Histogram
@@ -20,15 +21,13 @@ print("⏳ Loading AI Model...")
 classifier = DomainClassifier()
 
 # Redis 연결 설정
-r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+r = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'), decode_responses=True)
 
 # for prometheus
 REQUEST_COUNT = Counter(
     'surf_requests_total',
     'Total HTTP requests'
 )
-
-# Prometheus 히스토그램을 위한 버킷 정의 (초 단위)
 PRECISION_BUCKETS = (.0005, .001, .002, .005, .01, .025, .05, .075, .1, .25, .5, 1.0, 2.5, 5.0, float("inf"))
 
 HTTP_LATENCY = Histogram(
@@ -60,11 +59,9 @@ def check_block():
 
     predict_name = get_predict_name(domain)
     
-    # Redis에서 저장된 점수를 가져옴
     stored_score = r.get(f"block_mark:{client_ip}:{predict_name}")
 
     if stored_score:
-        # stored_score는 "85.5" 같은 문자열이므로 float으로 변환
         return jsonify({
             "result": "surf_blocked",
             "prob": float(stored_score),
@@ -81,11 +78,9 @@ def allow_domain():
     client_ip = request.remote_addr.replace('::ffff:', '')
 
     if mode == 'temp':
-        # 30분 임시 허용
         r.setex(f"allow:{client_ip}:{predict_name}", 1800, "1")
         return jsonify({"status": "success", "message": f"[{predict_name}] 30분간 임시 허용되었습니다." })
     else:
-        # 영구 허용
         r.set(f"whitelist:{client_ip}:{predict_name}", "1")
         return jsonify({"status": "success", "message": f"[{predict_name}] 영구 허용되었습니다."})
 
@@ -98,7 +93,6 @@ def report_false_positive():
     if not domain:
         return jsonify({"result": "error", "message": "No domain provided"}), 400
 
-    # 메트릭 증가 (해당 도메인의 카운트 +1)
     FALSE_POSITIVE_COUNTER.labels(domain=domain).inc()
     
     return jsonify({"result": "success", "message": "Report received"})
@@ -114,8 +108,7 @@ def before_request():
 
 if __name__ == '__main__':
     try:
-        # 포트 80은 반드시 sudo 권한이 필요합니다!
-        print("🚀 Server starting on Dual-Stack (IPv4/IPv6) port 80...")
-        app.run(host='::', port=80, debug=True, use_reloader=True, reloader_type='stat') # 디버그 모드를 켜서 에러를 확인하세요
-    except Exception as e:
+        server_port = os.getenv('SERVER_PORT')
+        print(f"🚀 Server starting on Dual-Stack (IPv4/IPv6) port {server_port}...")
+        app.run(host='::', port=server_port, debug=True, use_reloader=True, reloader_type='stat')
         print(f"Critical Error: {e}")
