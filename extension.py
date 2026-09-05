@@ -258,8 +258,22 @@ def check_block():
             return jsonify({
                 "result": "surf_blocked",
                 "prob": float(stored_score),
-                "domain": domain
+                "domain": domain,
+                "matched": "client"
             })
+
+    # 기기별 기록으로 못 찾는 조합이 있다. 53 에 직접 붙은 기기는 Unbound 가 IP 로
+    # 기록하는데, 확장이 터널을 지나 물어보면 그 IP 가 127.0.0.1 로 뭉개져 사라진다.
+    # 도메인 단위 기록(60초)으로 그 간극을 메운다. 판정은 도메인만 보고 하므로
+    # 같은 도메인이면 누구에게나 같은 결과다.
+    recent = r.get(f"block_recent:{domain}")
+    if recent:
+        return jsonify({
+            "result": "surf_blocked",
+            "prob": float(recent),
+            "domain": domain,
+            "matched": "recent"
+        })
 
     return jsonify({"result": "not_found"})
 
