@@ -7,7 +7,12 @@ import sys
 import time
 
 VENV_PATH = os.getenv('VENV_PATH')
-sys.path.insert(0, VENV_PATH)
+if VENV_PATH and VENV_PATH not in sys.path:
+    sys.path.insert(0, VENV_PATH)
+
+PROJECT_ROOT = os.getenv('PROJECT_ROOT')
+if PROJECT_ROOT and PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST, Histogram
 from flask import Flask, render_template, request, jsonify, Response
@@ -21,7 +26,12 @@ print("⏳ Loading AI Model...")
 classifier = DomainClassifier()
 
 # Redis 연결 설정
-r = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'), decode_responses=True)
+r = redis.Redis(
+    host=os.getenv('REDIS_HOST', '127.0.0.1'),
+    port=int(os.getenv('REDIS_PORT', '6379')),
+    db=int(os.getenv('REDIS_DB', '0')),
+    decode_responses=True
+)
 
 # for prometheus
 REQUEST_COUNT = Counter(
@@ -44,10 +54,12 @@ FALSE_POSITIVE_COUNTER = Counter(
 )
 
 def get_predict_name(domain):
-    domain = domain.lower()
+    if not domain:
+        return None
+    domain = domain.lower().strip().rstrip('.')
     if domain.startswith("www."):
-        return domain[4:]
-    return domain
+        domain = domain[4:]
+    return domain or None
 
 @app.route('/check')
 def check_block():
@@ -72,8 +84,11 @@ def check_block():
 
 @app.route('/allow', methods=['POST'])
 def allow_domain():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     predict_name = get_predict_name(data.get('domain'))
+    if not predict_name:
+        return jsonify({"status": "error", "message": "No domain"}), 400
+
     mode = data.get('mode')
     client_ip = request.remote_addr.replace('::ffff:', '')
 
@@ -86,9 +101,8 @@ def allow_domain():
 
 @app.route('/report-false-positive', methods=['POST'])
 def report_false_positive():
-    data = request.json
-    domain = data.get('domain')
-    domain = get_predict_name(domain)
+    data = request.get_json(silent=True) or {}
+    domain = get_predict_name(data.get('domain'))
     
     if not domain:
         return jsonify({"result": "error", "message": "No domain provided"}), 400
@@ -96,6 +110,16 @@ def report_false_positive():
     FALSE_POSITIVE_COUNTER.labels(domain=domain).inc()
     
     return jsonify({"result": "success", "message": "Report received"})
+
+@app.route('/healthz')
+def healthz():
+    """프로세스 감시용. Redis 연결까지 확인한다."""
+    try:
+        r.ping()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "degraded", "redis": str(e)}), 503
+
 
 @app.route('/metrics')
 def metrics():
@@ -107,8 +131,8 @@ def before_request():
 
 
 if __name__ == '__main__':
-    try:
-        server_port = os.getenv('SERVER_PORT')
-        print(f"🚀 Server starting on Dual-Stack (IPv4/IPv6) port {server_port}...")
-        app.run(host='::', port=server_port, debug=True, use_reloader=True, reloader_type='stat')
-        print(f"Critical Error: {e}")
+    # debug=True 로 열어두면 Werkzeug 디버거가 원격 코드 실행 통로가 된다.
+    # 외부에 노출되는 배포에는 개발 서버 대신 gunicorn 을 쓴다.
+    server_port = int(os.getenv('SERVER_PORT', '5000'))
+    print(f"🚀 Server starting on Dual-Stack (IPv4/IPv6) port {server_port}...", flush=True)
+    app.run(host='::', port=server_port, debug=False, use_reloader=False)
