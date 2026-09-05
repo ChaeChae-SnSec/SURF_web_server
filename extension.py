@@ -119,17 +119,38 @@ def get_predict_name(domain):
     return domain or None
 
 
-def client_id():
-    """기기 식별자. 토큰이 없을 때만 IP 로 물러선다.
+# 프록시를 거친 요청은 전부 이 주소로 보인다. 식별자로 쓰면 한 사람의 허용이
+# 모든 사용자에게 적용되므로 후보에서 뺀다.
+LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
 
-    터널·DoH 를 거치면 remote_addr 은 의미가 없다. 확장은 X-SURF-Client 를 보내고,
-    DoH 프록시는 ?c= 로 같은 토큰을 넘긴다. 둘 다 없으면 랩 안에서 직접 붙은
-    경우이므로 기존 방식대로 IP 를 쓴다.
+
+def client_ids():
+    """이 요청을 낸 기기를 가리킬 수 있는 식별자를 우선순위대로 모은다.
+
+    같은 기기라도 경로에 따라 다른 이름으로 기록된다.
+
+      DoH 를 쓰면   DoH 프록시가 토큰을 넘겨 Unbound 가 토큰으로 기록한다.
+      53 에 직접 붙으면  Unbound 가 클라이언트 IP 로 기록한다.
+
+    확장은 어느 쪽이든 토큰 헤더를 보내므로, 토큰만 보면 직접 붙은 경우의 기록을
+    찾지 못한다. 두 후보를 모두 들고 다녀야 양쪽이 맞물린다.
     """
+    ids = []
+
     token = request.headers.get('X-SURF-Client') or request.args.get('c')
     if token:
-        return token.strip()[:64]
-    return (request.remote_addr or 'unknown').replace('::ffff:', '')
+        ids.append(token.strip()[:64])
+
+    ip = (request.remote_addr or '').replace('::ffff:', '')
+    if ip and ip not in LOOPBACK and ip not in ids:
+        ids.append(ip)
+
+    return ids or ['unknown']
+
+
+def client_id():
+    """기록을 남길 때 쓰는 대표 식별자."""
+    return client_ids()[0]
 
 
 def rate_limited(cid):
@@ -167,13 +188,15 @@ def predict():
     if not domain:
         return jsonify({"error": "No domain"}), 400
 
-    cid = client_id()
+    cids = client_ids()
+    cid = cids[0]
     if rate_limited(cid):
         return jsonify({"error": "rate limited"}), 429
 
     # 사용자가 이미 허용해둔 도메인은 모델을 돌리지 않는다.
     try:
-        if r.exists(f"whitelist:{cid}:{domain}") or r.exists(f"allow:{cid}:{domain}"):
+        if any(r.exists(f"whitelist:{c}:{domain}") or r.exists(f"allow:{c}:{domain}")
+               for c in cids):
             EXT_PREDICT_TOTAL.labels(result='allowed', cached='allowlist').inc()
             return jsonify({"blocked": False, "prob": 0.0, "domain": domain,
                             "reason": "user_allowed"})
@@ -228,15 +251,15 @@ def check_block():
     if not domain:
         return jsonify({"error": "No domain"}), 400
 
-    cid = client_id()
-    stored_score = r.get(f"block_mark:{cid}:{domain}")
-
-    if stored_score:
-        return jsonify({
-            "result": "surf_blocked",
-            "prob": float(stored_score),
-            "domain": domain
-        })
+    # DNS 가 어느 이름으로 기록했든 찾아낸다. DoH 면 토큰, 53 직결이면 IP 다.
+    for cid in client_ids():
+        stored_score = r.get(f"block_mark:{cid}:{domain}")
+        if stored_score:
+            return jsonify({
+                "result": "surf_blocked",
+                "prob": float(stored_score),
+                "domain": domain
+            })
 
     return jsonify({"result": "not_found"})
 
@@ -249,18 +272,22 @@ def allow_domain():
         return jsonify({"status": "error", "message": "No domain"}), 400
 
     mode = data.get('mode')
-    cid = client_id()
+    cids = client_ids()
 
-    if mode == 'temp':
-        r.setex(f"allow:{cid}:{domain}", TEMP_ALLOW_TTL, "1")
-        message = f"[{domain}] 30분간 임시 허용되었습니다."
-    else:
-        r.set(f"whitelist:{cid}:{domain}", "1")
-        message = f"[{domain}] 영구 허용되었습니다."
+    # 후보 전체에 남긴다. Unbound 가 IP 로 보는 경로와 토큰으로 보는 경로가 갈리는데,
+    # 한쪽에만 기록하면 허용을 눌러도 DNS 가 계속 막는다.
+    for cid in cids:
+        if mode == 'temp':
+            r.setex(f"allow:{cid}:{domain}", TEMP_ALLOW_TTL, "1")
+        else:
+            r.set(f"whitelist:{cid}:{domain}", "1")
+        r.delete(f"block_mark:{cid}:{domain}")
+
+    message = (f"[{domain}] 30분간 임시 허용되었습니다." if mode == 'temp'
+               else f"[{domain}] 영구 허용되었습니다.")
 
     # 판정 캐시를 지워야 허용 직후 재조회에서 다시 막지 않는다.
     r.delete(f"pred:{domain}")
-    r.delete(f"block_mark:{cid}:{domain}")
 
     ALLOW_ACTIONS.labels(mode=('temp' if mode == 'temp' else 'perm')).inc()
     return jsonify({"status": "success", "message": message})
