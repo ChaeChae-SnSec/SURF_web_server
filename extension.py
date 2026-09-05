@@ -102,6 +102,21 @@ EXT_AI_LATENCY = Histogram(
     buckets=PRECISION_BUCKETS
 )
 
+# 대시보드가 두 경로를 합쳐 볼 수 있도록 DNS 쪽과 라벨 이름을 맞춘다.
+# 확장 단독 모드로 체험한 내역이 대시보드에 안 잡히면, 심사 교수가 직접 넣어본
+# 도메인이 화면에 나타나지 않는다. 시연에서 그 장면이 필요하다.
+EXT_QUERIES = Counter(
+    'surf_ext_queries_total',
+    'Queries judged on the extension path',
+    ['client_ip', 'result']
+)
+
+EXT_BLOCKED_LOG = Counter(
+    'surf_ext_blocked_total',
+    'Domains blocked on the extension path',
+    ['domain', 'client_ip']
+)
+
 ALLOW_ACTIONS = Counter(
     'surf_allow_actions_total',
     'User allow decisions from the block page',
@@ -206,6 +221,7 @@ def predict():
         if any(r.exists(f"whitelist:{c}:{domain}") or r.exists(f"allow:{c}:{domain}")
                for c in cids):
             EXT_PREDICT_TOTAL.labels(result='allowed', cached='allowlist').inc()
+            EXT_QUERIES.labels(client_ip=cid, result='whitelist').inc()
             return jsonify({"blocked": False, "prob": 0.0, "domain": domain,
                             "reason": "user_allowed"})
     except Exception as e:
@@ -238,7 +254,12 @@ def predict():
         except Exception as e:
             print(f"⚠️ Redis 캐시 저장 실패: {e}", flush=True)
 
+    label = 'blocked' if blocked else 'allowed'
+    EXT_QUERIES.labels(client_ip=cid, result=label).inc()
+
     if blocked:
+        EXT_BLOCKED_LOG.labels(domain=domain, client_ip=cid).inc()
+
         # DNS 경로와 같은 자리에 기록을 남긴다. 차단 페이지가 어느 경로로 열리든
         # /check 로 동일한 근거를 조회할 수 있다.
         try:
