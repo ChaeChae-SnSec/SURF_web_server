@@ -25,7 +25,7 @@ if PROJECT_ROOT and PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 import redis
 import torch
@@ -158,6 +158,14 @@ def run_model(domain):
     return pred == 1, score
 
 # ---------------------------------------------------------------- 라우트
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+
+
+@app.route('/privacy')
+def privacy_policy():
+    return send_from_directory(STATIC_DIR, 'privacy_policy.html')
+
 
 @app.route('/predict')
 def predict():

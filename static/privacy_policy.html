@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SURF 개인정보처리방침</title>
+    <style>
+        :root {
+            --bg: #0A1120;
+            --card: #101828;
+            --text-main: #eef2f7;
+            --text-dim: #93a0b4;
+            --accent-teal: #8FE8E0;
+            --accent-blue: #2E6FE0;
+            --border: rgba(143, 232, 224, 0.12);
+        }
+
+        body {
+            margin: 0;
+            padding: 40px 20px;
+            background: linear-gradient(160deg, #0A1120, #060A13);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', sans-serif;
+            line-height: 1.7;
+        }
+
+        .wrap {
+            max-width: 720px;
+            margin: 0 auto;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 48px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0 0 6px;
+            background: linear-gradient(90deg, var(--accent-teal), var(--accent-blue));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            display: inline-block;
+        }
+
+        .updated {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 32px;
+        }
+
+        h2 {
+            font-size: 16px;
+            color: var(--accent-teal);
+            margin: 32px 0 8px;
+        }
+
+        p, li {
+            font-size: 14px;
+            color: var(--text-main);
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        .muted {
+            color: var(--text-dim);
+        }
+
+        a {
+            color: var(--accent-blue);
+        }
+
+        code {
+            background: rgba(255, 255, 255, 0.06);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .contact-box {
+            margin-top: 8px;
+            padding: 16px 20px;
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <h1>SURF 개인정보처리방침</h1>
+        <div class="updated">최종 수정일: 2026-09-05</div>
+
+        <p>
+            SURF(이하 "확장 프로그램")는 AI 기반 악성 도메인(DGA) 탐지 및 다운로드 파일 위험 검사를
+            제공하는 Chrome 확장 프로그램입니다. 본 방침은 확장 프로그램이 어떤 정보를 수집하고,
+            어떻게 사용하며, 어떻게 보관하는지 설명합니다.
+        </p>
+
+        <h2>1. 수집하는 정보</h2>
+        <p>확장 프로그램은 아래 정보만 수집하여 판별 서버로 전송합니다.</p>
+        <ul>
+            <li>사용자가 접속을 시도하는 <strong>도메인 이름(hostname)</strong>만 전송합니다.
+                URL의 전체 경로(path), 쿼리 파라미터, 페이지 콘텐츠는 전송하지 않습니다.</li>
+            <li>이 기기를 서버 상의 허용 목록과 연결하기 위한 임의의 <strong>기기 식별 토큰</strong>
+                (설치 시 무작위로 생성되는 값)을 함께 전송합니다. 이 토큰은 실제 신원과 연결되지 않으며,
+                이름·이메일·IP 등 개인을 특정할 수 있는 정보를 포함하지 않습니다.</li>
+        </ul>
+        <p class="muted">
+            확장 프로그램은 페이지 콘텐츠, 로그인 정보, 비밀번호, 쿠키, 브라우징 기록 전체를
+            수집하거나 저장하지 않습니다.
+        </p>
+
+        <h2>2. 수집 목적</h2>
+        <p>
+            수집된 도메인 정보는 오직 AI 모델을 통한 <strong>실시간 악성 여부 판별</strong> 목적으로만
+            사용됩니다. 광고, 프로파일링, 통계 분석 등 다른 목적으로는 사용되지 않습니다.
+        </p>
+
+        <h2>3. 로컬 저장 데이터</h2>
+        <p>
+            사용자가 차단 페이지에서 선택한 <strong>임시 허용(30분)</strong> 및 <strong>영구 허용</strong>
+            목록은 브라우저의 <code>chrome.storage</code>에만 저장되며, 이 목록 자체는 외부로
+            전송되지 않습니다. (단, 허용 처리 시 해당 도메인과 허용 방식은 서버의 허용 상태 동기화를
+            위해 위 1항의 기기 식별 토큰과 함께 전송될 수 있습니다.)
+        </p>
+
+        <h2>4. 제3자 제공</h2>
+        <p>
+            수집된 정보는 어떠한 경우에도 제3자에게 판매되지 않으며, 서비스 제공에 필요한 범위를
+            벗어난 공유도 하지 않습니다.
+        </p>
+
+        <h2>5. 데이터 보관</h2>
+        <p>
+            판별 서버에 전송된 도메인 조회 기록은 서비스 운영 및 모델 개선 목적의 최소 기간 동안만
+            보관되며, 사용자를 식별할 수 있는 형태로 보관되지 않습니다.
+        </p>
+
+        <h2>6. 문의</h2>
+        <div class="contact-box">
+            개인정보 관련 문의는 GitHub Issues를 통해 남겨주세요:
+            <a href="https://github.com/ChaeChae-SnSec/SURF_extension/issues" target="_blank" rel="noopener">
+                github.com/ChaeChae-SnSec/SURF_extension/issues
+            </a>
+        </div>
+
+        <h2>7. 방침 변경</h2>
+        <p>
+            본 방침은 서비스 개선에 따라 변경될 수 있으며, 변경 시 이 페이지의 "최종 수정일"을
+            갱신하여 고지합니다.
+        </p>
+    </div>
+</body>
+
+</html>
