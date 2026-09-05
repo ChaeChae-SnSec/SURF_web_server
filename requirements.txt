@@ -1,0 +1,16 @@
+# 추론 서버 구동에 필요한 것만 적는다. 학습 의존성은 SURF_AI_model 쪽에 있다.
+flask>=3.0
+flask-cors>=4.0
+gunicorn>=21.2
+redis>=5.0
+prometheus-client>=0.20
+python-dotenv>=1.0
+
+# 모델
+torch>=2.0
+transformers>=4.38
+tldextract>=5.1
+numpy>=1.24
+pandas>=2.0
+polars>=0.20
+tqdm>=4.66
