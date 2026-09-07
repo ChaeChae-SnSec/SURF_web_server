@@ -102,6 +102,21 @@ EXT_AI_LATENCY = Histogram(
     buckets=PRECISION_BUCKETS
 )
 
+# 대시보드가 두 경로를 합쳐 볼 수 있도록 DNS 쪽과 라벨 이름을 맞춘다.
+# 확장 단독 모드로 체험한 내역이 대시보드에 안 잡히면, 심사 교수가 직접 넣어본
+# 도메인이 화면에 나타나지 않는다. 시연에서 그 장면이 필요하다.
+EXT_QUERIES = Counter(
+    'surf_ext_queries_total',
+    'Queries judged on the extension path',
+    ['client_ip', 'result']
+)
+
+EXT_BLOCKED_LOG = Counter(
+    'surf_ext_blocked_total',
+    'Domains blocked on the extension path',
+    ['domain', 'client_ip']
+)
+
 ALLOW_ACTIONS = Counter(
     'surf_allow_actions_total',
     'User allow decisions from the block page',
@@ -206,6 +221,7 @@ def predict():
         if any(r.exists(f"whitelist:{c}:{domain}") or r.exists(f"allow:{c}:{domain}")
                for c in cids):
             EXT_PREDICT_TOTAL.labels(result='allowed', cached='allowlist').inc()
+            EXT_QUERIES.labels(client_ip=cid, result='whitelist').inc()
             return jsonify({"blocked": False, "prob": 0.0, "domain": domain,
                             "reason": "user_allowed"})
     except Exception as e:
@@ -238,7 +254,12 @@ def predict():
         except Exception as e:
             print(f"⚠️ Redis 캐시 저장 실패: {e}", flush=True)
 
+    label = 'blocked' if blocked else 'allowed'
+    EXT_QUERIES.labels(client_ip=cid, result=label).inc()
+
     if blocked:
+        EXT_BLOCKED_LOG.labels(domain=domain, client_ip=cid).inc()
+
         # DNS 경로와 같은 자리에 기록을 남긴다. 차단 페이지가 어느 경로로 열리든
         # /check 로 동일한 근거를 조회할 수 있다.
         #
@@ -350,6 +371,16 @@ def report_false_positive():
     return jsonify({"result": "success", "message": "Report received"})
 
 
+def via_tunnel():
+    """이 요청이 인터넷에서 터널을 거쳐 들어왔는지.
+
+    cloudflared 가 원래 클라이언트 정보를 헤더로 붙여준다. 도커 네트워크 안에서
+    직접 부르는 Prometheus 수집이나 헬스체크에는 이 헤더가 없다.
+    """
+    return bool(request.headers.get('CF-Connecting-IP')
+                or request.headers.get('Cf-Ray'))
+
+
 @app.route('/healthz')
 def healthz():
     """터널·프로세스 감시용. Redis 까지 확인한다."""
@@ -357,11 +388,22 @@ def healthz():
         r.ping()
         return jsonify({"status": "ok"})
     except Exception as e:
+        # 외부에는 상태만 알려준다. 예외 문구에 내부 주소나 설정이 섞여 나갈 수 있다.
+        if via_tunnel():
+            return jsonify({"status": "degraded"}), 503
         return jsonify({"status": "degraded", "redis": str(e)}), 503
 
 
 @app.route('/metrics')
 def metrics():
+    """Prometheus 수집용. 인터넷에는 내보내지 않는다.
+
+    지표 라벨에 클라이언트 식별자와 조회한 도메인이 들어 있다. 공개되면 누가 어떤
+    도메인을 조회했는지 그대로 드러난다. Prometheus 는 도커 네트워크 안에서
+    수집하므로 터널을 거쳐 온 요청만 거절하면 된다.
+    """
+    if via_tunnel():
+        return jsonify({"error": "not found"}), 404
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 
