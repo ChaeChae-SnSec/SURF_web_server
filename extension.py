@@ -355,6 +355,16 @@ def report_false_positive():
     return jsonify({"result": "success", "message": "Report received"})
 
 
+def via_tunnel():
+    """이 요청이 인터넷에서 터널을 거쳐 들어왔는지.
+
+    cloudflared 가 원래 클라이언트 정보를 헤더로 붙여준다. 도커 네트워크 안에서
+    직접 부르는 Prometheus 수집이나 헬스체크에는 이 헤더가 없다.
+    """
+    return bool(request.headers.get('CF-Connecting-IP')
+                or request.headers.get('Cf-Ray'))
+
+
 @app.route('/healthz')
 def healthz():
     """터널·프로세스 감시용. Redis 까지 확인한다."""
@@ -362,11 +372,22 @@ def healthz():
         r.ping()
         return jsonify({"status": "ok"})
     except Exception as e:
+        # 외부에는 상태만 알려준다. 예외 문구에 내부 주소나 설정이 섞여 나갈 수 있다.
+        if via_tunnel():
+            return jsonify({"status": "degraded"}), 503
         return jsonify({"status": "degraded", "redis": str(e)}), 503
 
 
 @app.route('/metrics')
 def metrics():
+    """Prometheus 수집용. 인터넷에는 내보내지 않는다.
+
+    지표 라벨에 클라이언트 식별자와 조회한 도메인이 들어 있다. 공개되면 누가 어떤
+    도메인을 조회했는지 그대로 드러난다. Prometheus 는 도커 네트워크 안에서
+    수집하므로 터널을 거쳐 온 요청만 거절하면 된다.
+    """
+    if via_tunnel():
+        return jsonify({"error": "not found"}), 404
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 
