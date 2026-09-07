@@ -241,8 +241,13 @@ def predict():
     if blocked:
         # DNS 경로와 같은 자리에 기록을 남긴다. 차단 페이지가 어느 경로로 열리든
         # /check 로 동일한 근거를 조회할 수 있다.
+        #
+        # "predict:" 접두어를 붙이는 이유: 이 도메인이 실제로 등록 안 된 이름이면
+        # 브라우저의 진짜 DNS 조회도 (Unbound와 무관하게) 자연스럽게 NXDOMAIN을 낸다. 
+        # 그러면 DNS 리스너가 /check 를 불러서 방금 여기 남긴 기록을 주워가고
+        # "DNS 가 막았다"고 잘못 표시하게 된다. 접두어로 "이 기록은 단독 모드가 남긴 것"임을 남겨서, /check 가 진짜 출처를 구분해 돌려줄 수 있게 한다.
         try:
-            r.setex(f"block_mark:{cid}:{domain}", BLOCK_MARK_TTL, str(score))
+            r.setex(f"block_mark:{cid}:{domain}", BLOCK_MARK_TTL, f"predict:{score}")
         except Exception as e:
             print(f"⚠️ Redis block_mark 저장 실패: {e}", flush=True)
 
@@ -263,24 +268,35 @@ def check_block():
     for cid in client_ids():
         stored_score = r.get(f"block_mark:{cid}:{domain}")
         if stored_score:
+            # "predict:" 접두어가 있으면 단독 모드(/predict)가 남긴 기록이다 —
+            # 이 도메인이 미등록 도메인이라 우연히 NXDOMAIN이 났을 뿐, DNS 계층이
+            # 실제로 판단한 게 아니다. 접두어가 없으면 Unbound가 남긴 순수 점수다.
+            if stored_score.startswith("predict:"):
+                source = "predict"
+                prob = float(stored_score[len("predict:"):])
+            else:
+                source = "dns"
+                prob = float(stored_score)
             return jsonify({
                 "result": "surf_blocked",
-                "prob": float(stored_score),
+                "prob": prob,
                 "domain": domain,
-                "matched": "client"
+                "matched": "client",
+                "source": source
             })
 
     # 기기별 기록으로 못 찾는 조합이 있다. 53 에 직접 붙은 기기는 Unbound 가 IP 로
     # 기록하는데, 확장이 터널을 지나 물어보면 그 IP 가 127.0.0.1 로 뭉개져 사라진다.
     # 도메인 단위 기록(60초)으로 그 간극을 메운다. 판정은 도메인만 보고 하므로
-    # 같은 도메인이면 누구에게나 같은 결과다.
+    # 같은 도메인이면 누구에게나 같은 결과다. 이 기록은 Unbound 전용이라 항상 dns.
     recent = r.get(f"block_recent:{domain}")
     if recent:
         return jsonify({
             "result": "surf_blocked",
             "prob": float(recent),
             "domain": domain,
-            "matched": "recent"
+            "matched": "recent",
+            "source": "dns"
         })
 
     return jsonify({"result": "not_found"})
