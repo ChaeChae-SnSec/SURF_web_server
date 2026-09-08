@@ -15,6 +15,7 @@ dotenv.load_dotenv()
 import os
 import sys
 import time
+import json
 
 VENV_PATH = os.getenv('VENV_PATH')
 if VENV_PATH and VENV_PATH not in sys.path:
@@ -193,6 +194,29 @@ def run_model(domain):
     score = round(max(0.0, (raw_percent - 50) * 2), 2)
     return pred == 1, score
 
+
+RECENT_LIST_MAX = 49  # LTRIM 상한. 0부터 세므로 실제로는 50건 보관
+
+
+def push_recent(client_ip, domain, blocked, prob):
+    """최근 판정을 Redis 링버퍼(recent:ext)에 남긴다.
+
+    Grafana의 '최신 확장 질의' 표가 여기서 읽는다. DNS 모듈의 push_recent 와
+    같은 JSON 형태를 쓴다.
+    """
+    try:
+        entry = json.dumps({
+            "ts": time.time(),
+            "client": client_ip,
+            "domain": domain,
+            "blocked": bool(blocked),
+            "prob": prob,
+        })
+        r.lpush("recent:ext", entry)
+        r.ltrim("recent:ext", 0, RECENT_LIST_MAX)
+    except Exception as e:
+        print(f"⚠️ recent 기록 실패: {e}", flush=True)
+
 # ---------------------------------------------------------------- 라우트
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
@@ -256,6 +280,7 @@ def predict():
 
     label = 'blocked' if blocked else 'allowed'
     EXT_QUERIES.labels(client_ip=cid, result=label).inc()
+    push_recent(cid, domain, blocked, score)
 
     if blocked:
         EXT_BLOCKED_LOG.labels(domain=domain, client_ip=cid).inc()
@@ -379,6 +404,32 @@ def via_tunnel():
     """
     return bool(request.headers.get('CF-Connecting-IP')
                 or request.headers.get('Cf-Ray'))
+
+
+@app.route('/recent/<kind>')
+def recent(kind):
+    """최근 판정 10건. Grafana Infinity 데이터소스가 도커 네트워크 안에서만 호출한다.
+
+    도메인·클라이언트 식별자가 그대로 담겨 있어 /metrics 와 같은 이유로 인터넷에는
+    내보내지 않는다.
+    """
+    if via_tunnel():
+        return jsonify({"error": "not found"}), 404
+    if kind not in ("dns", "ext"):
+        return jsonify({"error": "unknown kind"}), 400
+
+    try:
+        raw = r.lrange(f"recent:{kind}", 0, 9)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+    rows = []
+    for item in raw:
+        try:
+            rows.append(json.loads(item))
+        except (TypeError, ValueError):
+            continue
+    return jsonify(rows)
 
 
 @app.route('/healthz')
