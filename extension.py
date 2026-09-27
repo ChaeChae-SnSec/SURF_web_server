@@ -12,6 +12,7 @@
 import dotenv
 dotenv.load_dotenv()
 
+import ipaddress
 import os
 import sys
 import time
@@ -41,6 +42,7 @@ torch.set_num_threads(int(os.getenv('TORCH_THREADS', '2')))
 PREDICT_CACHE_TTL = int(os.getenv('PREDICT_CACHE_TTL', '21600'))   # 6시간
 BLOCK_MARK_TTL = int(os.getenv('BLOCK_MARK_TTL', '300'))
 TEMP_ALLOW_TTL = int(os.getenv('TEMP_ALLOW_TTL', '1800'))          # 30분
+ALLOW_RECENT_TTL = int(os.getenv('ALLOW_RECENT_TTL', '5'))         # 재접속 순간만 커버, 최대한 짧게
 RATE_LIMIT_PER_MIN = int(os.getenv('RATE_LIMIT_PER_MIN', '600'))
 
 # 웹 데모 페이지가 다른 오리진에서 호출한다. 확장은 host_permissions 로 통과하므로
@@ -150,6 +152,14 @@ def client_ids():
 
     확장은 어느 쪽이든 토큰 헤더를 보내므로, 토큰만 보면 직접 붙은 경우의 기록을
     찾지 못한다. 두 후보를 모두 들고 다녀야 양쪽이 맞물린다.
+
+    단, 그 IP 가 사설 대역(RFC1918)이면 후보에서 뺀다. 이 요청이 Flask 까지
+    사설 IP로 도달했다는 건 중간에 NAT 공유기를 거쳤다는 뜻인데, 그 공유기
+    뒤의 모든 기기가 같은 주소를 나눠 쓴다. 허용은 확장에서만 누르고 확장은
+    항상 토큰을 보내므로, 이 경우 IP를 후보로 남겨두면 한 사람의 허용이
+    같은 공유기를 쓰는 남들한테까지 새어나간다 (오염). 대신 확장 없이 DNS만
+    직결로 붙는 기기는 이 경로로는 허용을 등록할 수 없게 되는데, 애초에
+    허용 버튼 자체가 확장 UI 에만 있으니 실질적인 손해는 없다.
     """
     ids = []
 
@@ -159,7 +169,12 @@ def client_ids():
 
     ip = (request.remote_addr or '').replace('::ffff:', '')
     if ip and ip not in LOOPBACK and ip not in ids:
-        ids.append(ip)
+        try:
+            shared = ipaddress.ip_address(ip).is_private
+        except ValueError:
+            shared = False
+        if not shared:
+            ids.append(ip)
 
     return ids or ['unknown']
 
@@ -357,6 +372,29 @@ def allow_domain():
 
     mode = data.get('mode')
     cids = client_ids()
+
+    if mode in ('once', 'dns30'):
+        # DNS 로 막힌 경우 전용. 53 직결 기기는 서버가 개인별로 구분할 방법이
+        # 없어서(client_ids() 가 공유 IP를 후보에서 뺐으므로), 토큰 기반
+        # whitelist/allow 를 아무리 써봐야 Unbound 는 절대 못 찾는다.
+        #
+        # 대신 도메인 단위 다리(allow_recent)에 "실제 DNS 응답에 강제할
+        # TTL(초)"을 실어 보낸다. Unbound 가 MODULE_EVENT_MODDONE 에서 이
+        # 값을 읽어 응답 TTL을 덮어쓰면, 그 뒤로는 이 기기의 브라우저/OS
+        # 자체 캐시가 그 시간만큼 기억한다 - 서버가 기기를 구분할 필요 자체가
+        # 없어진다. 0 = 이번 접속만, 1800 = 대략 30분 (실제로는 그 기기의
+        # 캐시가 얼마나 오래 살아남느냐에 달렸다).
+        force_ttl = 0 if mode == 'once' else 1800
+        r.setex(f"allow_recent:{domain}", ALLOW_RECENT_TTL, str(force_ttl))
+        for cid in cids:
+            r.delete(f"block_mark:{cid}:{domain}")
+        r.delete(f"pred:{domain}")
+
+        message = (f"[{domain}] 이번 접속만 허용되었습니다." if mode == 'once'
+                   else f"[{domain}] 약 30분간 허용됩니다 (기기 캐시에 따라 달라질 수 있습니다).")
+
+        ALLOW_ACTIONS.labels(mode=mode).inc()
+        return jsonify({"status": "success", "message": message})
 
     # 후보 전체에 남긴다. Unbound 가 IP 로 보는 경로와 토큰으로 보는 경로가 갈리는데,
     # 한쪽에만 기록하면 허용을 눌러도 DNS 가 계속 막는다.
