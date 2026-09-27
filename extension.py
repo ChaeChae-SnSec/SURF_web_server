@@ -236,6 +236,91 @@ def push_recent(client_ip, domain, blocked, prob):
     except Exception as e:
         print(f"⚠️ recent 기록 실패: {e}", flush=True)
 
+def block_context(cids, domain, fallback_prob=None):
+    """무엇을 막았던 것인지 block_mark 에서 되읽는다.  ->  (위험도, 차단 경로)
+
+    값의 생김새로 어느 경로가 막았는지까지 갈린다 - "predict:" 접두어가 붙어 있으면
+    확장이 브라우저단에서 막은 것이고, 없으면 Unbound 가 남긴 순수 점수다.
+    기록이 이미 만료됐으면(BLOCK_MARK_TTL) 차단 페이지가 들고 있던 값을 쓴다.
+
+    /allow 는 이 기록을 지우므로 지우기 전에 불러야 한다.
+    """
+    # 기록용 부가 정보일 뿐이라 여기서 예외를 내보내지 않는다. Redis 가 죽어도
+    # 허용과 오탐 신고 자체는 하던 대로 처리돼야 한다.
+    try:
+        for cid in cids:
+            mark = r.get(f"block_mark:{cid}:{domain}")
+            if not mark:
+                continue
+            if mark.startswith("predict:"):
+                source, raw = '확장', mark[len("predict:"):]
+            else:
+                source, raw = 'DNS', mark
+            try:
+                return float(raw), source
+            except (TypeError, ValueError):
+                break
+    except Exception as e:
+        print(f"⚠️ 차단 근거 조회 실패: {e}", flush=True)
+
+    try:
+        return float(fallback_prob), '?'
+    except (TypeError, ValueError):
+        return 0.0, '?'
+
+
+# 허용 버튼이 내는 모드. 라벨은 서버가 붙여 화면에 그대로 싣는다.
+ALLOW_MODE_LABELS = {
+    'once': '이번 접속만',
+    'temp': '30분 임시',
+    'perm': '영구',
+}
+
+
+def push_allow(client_ip, domain, mode, prob, source):
+    """사용자가 허용을 누른 사실을 Redis 링버퍼(recent:allow)에 남긴다.
+
+    Grafana 의 '최근 허용' 표와 watch-queries.sh 가 여기서 읽는다. 질의 기록과
+    버퍼를 나눈 이유는 빈도 차이다. 질의는 초당 여러 건이 들어와 50건 버퍼가
+    몇 초 만에 밀리는데, 허용은 시연 한 번에 두어 건이라 같은 곳에 섞으면
+    금방 떠내려간다.
+    """
+    try:
+        entry = json.dumps({
+            "ts": time.time(),
+            "client": client_ip,
+            "domain": domain,
+            "mode": ALLOW_MODE_LABELS.get(mode, mode or '?'),
+            "prob": prob,
+            "source": source,
+        })
+        r.lpush("recent:allow", entry)
+        r.ltrim("recent:allow", 0, RECENT_LIST_MAX)
+    except Exception as e:
+        print(f"⚠️ 허용 기록 실패: {e}", flush=True)
+
+
+def push_fp(client_ip, domain, prob, source):
+    """오탐 신고를 Redis 링버퍼(recent:fp)에 남긴다.
+
+    fp_reports(zset)는 도메인별 누적 횟수만 갖고 있어 언제 누가 눌렀는지가
+    없다. 화이트리스트 반영 대상을 고를 때는 누적이 맞지만, 대시보드에서는
+    방금 누른 것이 보여야 한다.
+    """
+    try:
+        entry = json.dumps({
+            "ts": time.time(),
+            "client": client_ip,
+            "domain": domain,
+            "prob": prob,
+            "source": source,
+        })
+        r.lpush("recent:fp", entry)
+        r.ltrim("recent:fp", 0, RECENT_LIST_MAX)
+    except Exception as e:
+        print(f"⚠️ 오탐 신고 기록 실패: {e}", flush=True)
+
+
 # ---------------------------------------------------------------- 라우트
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
@@ -377,6 +462,10 @@ def allow_domain():
     mode = data.get('mode')
     cids = client_ids()
 
+    # 무엇을 허용한 것인지는 block_mark 가 들고 있다. 아래 두 분기 모두 이 기록을
+    # 지우므로 먼저 읽어둔다.
+    prob, source = block_context(cids, domain, data.get('prob'))
+
     if mode == 'once':
         # DNS 로 막힌 경우 전용. 53 직결 기기는 서버가 개인별로 구분할 방법이
         # 없어서(client_ids() 가 공유 IP를 후보에서 뺐으므로), 토큰 기반
@@ -390,6 +479,7 @@ def allow_domain():
         r.delete(f"pred:{domain}")
 
         ALLOW_ACTIONS.labels(mode='once').inc()
+        push_allow(cids[0], domain, 'once', prob, source)
         return jsonify({"status": "success", "message": f"[{domain}] 이번 접속만 허용되었습니다."})
 
     # 후보 전체에 남긴다. Unbound 가 IP 로 보는 경로와 토큰으로 보는 경로가 갈리는데,
@@ -407,7 +497,9 @@ def allow_domain():
     # 판정 캐시를 지워야 허용 직후 재조회에서 다시 막지 않는다.
     r.delete(f"pred:{domain}")
 
-    ALLOW_ACTIONS.labels(mode=('temp' if mode == 'temp' else 'perm')).inc()
+    mode = 'temp' if mode == 'temp' else 'perm'
+    ALLOW_ACTIONS.labels(mode=mode).inc()
+    push_allow(cids[0], domain, mode, prob, source)
     return jsonify({"status": "success", "message": message})
 
 
@@ -419,14 +511,20 @@ def report_false_positive():
     if not domain:
         return jsonify({"result": "error", "message": "No domain provided"}), 400
 
+    cids = client_ids()
+    prob, source = block_context(cids, domain, data.get('prob'))
+
     FALSE_POSITIVE_COUNTER.labels(domain=domain).inc()
 
     # 신고 내역을 남겨 운영 중에 화이트리스트 반영 대상을 뽑을 수 있게 한다.
+    # 누적(zset)과 개별 이벤트(링버퍼)를 따로 둔다. 전자는 화이트리스트 반영
+    # 대상을 고르는 데 쓰고, 후자는 방금 누른 것이 화면에 뜨게 하는 용도다.
     try:
         r.zincrby("fp_reports", 1, domain)
     except Exception as e:
         print(f"⚠️ 오탐 기록 실패: {e}", flush=True)
 
+    push_fp(cids[0], domain, prob, source)
     return jsonify({"result": "success", "message": "Report received"})
 
 
@@ -449,7 +547,7 @@ def recent(kind):
     """
     if via_tunnel():
         return jsonify({"error": "not found"}), 404
-    if kind not in ("dns", "ext"):
+    if kind not in ("dns", "ext", "allow", "fp"):
         return jsonify({"error": "unknown kind"}), 400
 
     try:
