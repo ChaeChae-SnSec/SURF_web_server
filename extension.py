@@ -42,7 +42,11 @@ torch.set_num_threads(int(os.getenv('TORCH_THREADS', '2')))
 PREDICT_CACHE_TTL = int(os.getenv('PREDICT_CACHE_TTL', '21600'))   # 6시간
 BLOCK_MARK_TTL = int(os.getenv('BLOCK_MARK_TTL', '300'))
 TEMP_ALLOW_TTL = int(os.getenv('TEMP_ALLOW_TTL', '1800'))          # 30분
-ALLOW_RECENT_TTL = int(os.getenv('ALLOW_RECENT_TTL', '5'))         # 재접속 순간만 커버, 최대한 짧게
+ALLOW_RECENT_TTL = int(os.getenv('ALLOW_RECENT_TTL', '90'))        # OS 리졸버가 negative-cache TTL 0을
+                                                                     # 무시하고 자체 최소값(macOS 실측 결과
+                                                                     # 10~12초보다 훨씬 김)을 강제해서,
+                                                                     # 클라이언트 재시도 창과 확실히 겹치게
+                                                                     # 넉넉히 잡음
 RATE_LIMIT_PER_MIN = int(os.getenv('RATE_LIMIT_PER_MIN', '600'))
 
 # 웹 데모 페이지가 다른 오리진에서 호출한다. 확장은 host_permissions 로 통과하므로
