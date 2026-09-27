@@ -373,28 +373,20 @@ def allow_domain():
     mode = data.get('mode')
     cids = client_ids()
 
-    if mode in ('once', 'dns30'):
+    if mode == 'once':
         # DNS 로 막힌 경우 전용. 53 직결 기기는 서버가 개인별로 구분할 방법이
         # 없어서(client_ids() 가 공유 IP를 후보에서 뺐으므로), 토큰 기반
-        # whitelist/allow 를 아무리 써봐야 Unbound 는 절대 못 찾는다.
-        #
-        # 대신 도메인 단위 다리(allow_recent)에 "실제 DNS 응답에 강제할
-        # TTL(초)"을 실어 보낸다. Unbound 가 MODULE_EVENT_MODDONE 에서 이
-        # 값을 읽어 응답 TTL을 덮어쓰면, 그 뒤로는 이 기기의 브라우저/OS
-        # 자체 캐시가 그 시간만큼 기억한다 - 서버가 기기를 구분할 필요 자체가
-        # 없어진다. 0 = 이번 접속만, 1800 = 대략 30분 (실제로는 그 기기의
-        # 캐시가 얼마나 오래 살아남느냐에 달렸다).
-        force_ttl = 0 if mode == 'once' else 1800
-        r.setex(f"allow_recent:{domain}", ALLOW_RECENT_TTL, str(force_ttl))
+        # whitelist/allow 를 아무리 써봐야 Unbound 는 절대 못 찾는다. "30분"
+        # 같은 지속시간은 애초에 보장을 못 하니(기기 브라우저 캐시에 통째로
+        # 맡겨야 함), 약속할 수 있는 만큼만 제공한다 - 도메인 단위 다리
+        # (allow_recent)로 이번 재접속 한 번만 통과시킨다.
+        r.setex(f"allow_recent:{domain}", ALLOW_RECENT_TTL, "0")
         for cid in cids:
             r.delete(f"block_mark:{cid}:{domain}")
         r.delete(f"pred:{domain}")
 
-        message = (f"[{domain}] 이번 접속만 허용되었습니다." if mode == 'once'
-                   else f"[{domain}] 약 30분간 허용됩니다 (기기 캐시에 따라 달라질 수 있습니다).")
-
-        ALLOW_ACTIONS.labels(mode=mode).inc()
-        return jsonify({"status": "success", "message": message})
+        ALLOW_ACTIONS.labels(mode='once').inc()
+        return jsonify({"status": "success", "message": f"[{domain}] 이번 접속만 허용되었습니다."})
 
     # 후보 전체에 남긴다. Unbound 가 IP 로 보는 경로와 토큰으로 보는 경로가 갈리는데,
     # 한쪽에만 기록하면 허용을 눌러도 DNS 가 계속 막는다.
